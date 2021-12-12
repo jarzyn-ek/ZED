@@ -1,0 +1,336 @@
+---
+title: "ZED projekt"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+# 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(datasets)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readxl)
+library(corrplot)
+library(plotly)
+library(heatmaply)
+library(ggcorrplot)
+library(vtable)
+library(purrr)
+library(caret)
+library(randomForest)
+```
+
+## Podsumowanie
+
+Dane wybrane do predykcji cen złota to statystyki dotyczące sytuacji ekonomicznej, gospodarczej i społecznej na świecie na przestrzeni lat oraz wskaźniki kapitalizacji giełdowej S&P Composite. Z powodu dużej ilości wartości nieznanych oraz faktu, że jeden z najpopularniejszych i najczęściej zalecanych algorytmów - Random Forest nie jest w stanie ich obsłużyć, konieczne były pewne modyfikacje. Z końcowego zbioru danych zostały usunięte parametry zawierające ponad połowę wartości pustych, natomiast akcja obsługi wartości pustych została ustawiona na na.roughfix, co polega na zastąpieniu nieznanych wartości medianą kolumny. Dzięki temu, jesteśmy w stanie oszacować najbardziej wpływowe czynniki, które są powiązane ze zmianą cen złota. W dużej mierze są to parametry, które pośrednio wskazują na upływ lat i starzenie się społeczeństwa (jak np odsetek populacji w wieku 65 lat i powyżej), ale również ogólne wskaźniki poziomu i stylu życia społeczeństwa (jak np PKB, odsetek urodzeń czy odsetek populacji miejskiej).
+
+# Analiza wskaźników kapitalizacji giełdowej w ostatnim stuleciu
+
+## Wskaźniki kapitalizacji giełdowej - zmiana wartości w przeciągu lat
+
+```{r results='asis', warning=FALSE, fig.height=30}
+
+s_p_composite <- read.csv("Dokumenty/ZED-lab/S&P Composite.csv", header=TRUE) %>%
+                  gather(key = "param", value = "value", 2:10) %>%
+                  mutate(year = as.numeric(substr(Year,1,4)))
+
+s_p_composite <- aggregate(value ~ year + param, data = s_p_composite, mean)
+
+s_p_no_missing_values <- s_p_composite[!is.na(s_p_composite$value), ]
+s_p_composite_plot <- ggplot(data = s_p_no_missing_values, mapping = aes(x = year, y = value, color=param)) + geom_line() + geom_point() + facet_wrap(~param, scales = "free", ncol=1)
+
+ggplotly(s_p_composite_plot)
+
+```
+## Statystyki ogólne
+
+```{r results='asis'}
+st(s_p_composite %>% spread(param, value))
+```
+
+## Rozkład gęstości
+
+```{r results='asis', fig.height=12, fig.width=8}
+
+s_p_composite_density_plot <- ggplot(s_p_composite, aes(x=value)) + geom_density() + facet_wrap(~param, ncol=1, scales = "free")
+
+ggplotly(s_p_composite_density_plot)
+
+```
+
+## Statystyki ogólne - forma wykresów pudełkowych - skala szczegółowa
+
+```{r results='asis', fig.height=20, fig.width=8}
+
+s_p_composite_boxplot_multiple <- ggplot(data=s_p_composite, mapping = aes(x = as.factor(''), y=value, color = param)) + geom_boxplot() + facet_wrap(~param, scales = "free")
+ggplotly(s_p_composite_boxplot_multiple)
+
+```
+
+# Parametry związane z obrotem bitcoina
+
+## Zmiana wartości w przeciągu ostatnich lat
+
+```{r results='asis', warning=FALSE, fig.height=15, fig.width=8}
+bchain_diff <- read.csv("Dokumenty/ZED-lab/Bitcoin/BCHAIN-DIFF.csv") %>%
+                rename(diff = Value)
+
+bchain_hrate <- read.csv("Dokumenty/ZED-lab/Bitcoin/BCHAIN-HRATE.csv") %>%
+                rename(hrate = Value)
+
+bchain_mkpru <- read.csv("Dokumenty/ZED-lab/Bitcoin/BCHAIN-MKPRU.csv") %>%
+                rename(mkpru = Value)
+
+bchain_trvou <- read.csv("Dokumenty/ZED-lab/Bitcoin/BCHAIN-TRVOU.csv") %>%
+                rename(trvou = Value)
+
+bchain <- merge(x = bchain_diff, y = bchain_hrate, by = "Date")
+bchain <- merge(x = bchain, y = bchain_mkpru, by = "Date")
+bchain <- merge(x = bchain, y = bchain_trvou, by = "Date")
+
+bchain <- bchain %>% gather(key="param", value="value", 2:5)
+
+bchain$Date <- substr(bchain$Date,1,4)
+bchain <- bchain %>%
+                mutate_at("Date", as.numeric)
+bchain <- aggregate(bchain, by=list(bchain$Date, bchain$param), FUN=mean, na.rm=TRUE) %>%
+            select(-Date, -param) %>%
+            rename(Year = Group.1, param = Group.2)
+
+chart_bchain <- ggplot(data=bchain, mapping = aes(x=Year, y=value)) + geom_point() + geom_line() + facet_wrap(~param, ncol=1, scales = "free")
+ggplotly(chart_bchain)
+```
+
+## Rozkład gęstości
+
+```{r results='asis'}
+
+bchain_density_plot <- ggplot(bchain, aes(x=value)) + geom_density() + facet_wrap(~param, ncol=1, scales = "free")
+
+ggplotly(bchain_density_plot)
+
+```
+
+## Statystyki ogólne
+
+```{r results='asis'}
+st(bchain %>% spread(param, value))
+```
+
+## Statystyki ogólne - forma wykresów pudełkowych - wspólna skala
+
+```{r results='asis'}
+
+bchain_boxplot <- ggplot(data=bchain, mapping = aes(y=value, color=param)) + geom_boxplot()
+ggplotly(bchain_boxplot)
+
+```
+
+## Statystyki ogólne - forma wykresów pudełkowych - skala szczegółowa
+
+```{r results='asis', fig.height=12, fig.width=8}
+
+bchain_boxplot_multiple <- ggplot(data=bchain, mapping = aes(x = as.factor(''), y=value, color = param)) + geom_boxplot() + facet_wrap(~param, scales = "free") + ylab("Params boxplots")
+ggplotly(bchain_boxplot_multiple)
+```
+
+# Wartości walut w odniesieniu do dolara amerykańskiego
+
+## Zmiana na przestrzeni lat - wspólna skala
+
+```{r results='asis', warning=FALSE}
+
+currency_exchange_rates <- read.csv("Dokumenty/ZED-lab/CurrencyExchangeRates.csv", header=TRUE)
+currency_exchange_rates <- currency_exchange_rates %>% gather(key = "currency", value = "value", 2:52)
+currency_exchange_rates$Date <- substr(currency_exchange_rates$Date,1,4)
+currency_exchange_rates <- aggregate(currency_exchange_rates, by=list(currency_exchange_rates$Date, currency_exchange_rates$currency), FUN=mean, na.rm=TRUE) %>% select(-Date, -currency) %>% rename(Year = Group.1, Currency = Group.2)
+
+currency_exchange_no_missing_values <- currency_exchange_rates[!is.na(currency_exchange_rates$value), ]
+
+currency_exchange_rates_plot <- ggplot(data=currency_exchange_no_missing_values, mapping = aes(x=factor(Year), y=value, color=Currency)) + geom_point() + geom_line(aes(group=1)) + scale_x_discrete(breaks = seq(1995, 2018, by = 5))
+
+ggplotly(currency_exchange_rates_plot)
+
+```
+
+## Zmiana na przestrzeni lat - skala szczegółowa
+
+```{r results='asis', warning=FALSE, fig.height=100}
+
+currency_facet_plot <- ggplot(data=currency_exchange_no_missing_values, mapping = aes(x = factor(Year), y = value, color=Currency)) + geom_line(aes(group=1)) + geom_point() + facet_wrap(~Currency, ncol=1, scales = "free") + scale_x_discrete(breaks = seq(1995, 2018, by = 5))
+
+ggplotly(currency_facet_plot)
+```
+
+## Statystyki ogólne
+```{r results='asis'}
+st(currency_exchange_rates %>% spread(Currency, value))
+```
+
+# Ceny złota
+
+## Zmiana na przestrzeni lat
+
+```{r results='asis', warning=FALSE}
+gold_prices <- read.csv("Dokumenty/ZED-lab/Gold prices.csv", header=TRUE) %>%
+                gather(key = "currency", value = "value", 2:7) %>%
+                mutate(year = as.numeric(substr(Date,1,4))) %>%
+                select(-Date)
+gold_prices <- aggregate(value ~ year + currency, data = gold_prices, mean)
+                
+gold_prices_plot <- ggplot(data = gold_prices, mapping = aes(x = year, y = value, color = currency)) + geom_line() + geom_point()
+
+ggplotly(gold_prices_plot)
+
+```
+
+## Statystyki ogólne
+
+```{r results='asis'}
+
+st(gold_prices %>% spread(currency, value))
+
+```
+
+## Statystyki ogólne - forma wykresów pudełkowych - skala szczegółowa
+
+```{r results='asis', fig.height=20, fig.width=8}
+
+gold_prices_boxplot_multiple <- ggplot(data=gold_prices, mapping = aes(x = as.factor(''), y=value, color = currency)) + geom_boxplot() + facet_wrap(~currency, scales = "free", ncol = 2)
+ggplotly(gold_prices_boxplot_multiple)
+
+```
+
+# Rozwój państw
+
+## Heatmapa korelacji parametrów określających rozwój kraju
+
+```{r message=TRUE, warning=FALSE, results='asis'}
+
+wdi <- read_excel("Dokumenty/ZED-lab/World_Development_Indicators.xlsx") %>%
+  data.frame() %>%
+  filter(!is.na(Country.Code))
+
+wdi[wdi == ".."] <- NA
+
+wdi <- wdi %>%
+  gather("year","value", -Country.Name, -Country.Code, -Series.Name, -Series.Code) %>%
+  mutate_at("value", as.numeric)
+
+wdi$year <- substr(wdi$year,2,5)
+
+```
+
+```{r results='asis', warning=FALSE}
+
+#wdi_by_country <- wdi %>%
+#                  mutate(ID = paste(Country.Code,year)) %>%
+#                  spread(Series.Code,value) %>%
+#                  select(-year)
+
+wdi_by_year_only <- wdi %>% 
+                    spread(Series.Name,value) %>%
+                    select(-Country.Code, -Series.Code, -Country.Name)
+wdi_by_year_only <- aggregate(wdi_by_year_only, by=list(wdi_by_year_only$year), FUN=mean, na.rm = TRUE) %>%
+                    select(-year) %>%
+                    rename(year = Group.1)
+
+wdi_by_year_only$year <- as.numeric(wdi_by_year_only$year)
+                    
+
+#wdi <- aggregate(wdi, by=list(wdi$ID), FUN=mean, na.rm=TRUE) %>%
+#  select(-Group.1, -Country.Name, -Country.Code, -Series.Name, -ID)
+
+
+
+#col<- colorRampPalette(c("blue", "white", "red"))(20)
+
+#heatmap(x = wdi.cor, col = col, symm = TRUE)
+
+
+```
+
+```{r results='asis'}
+
+gold_prices <- gold_prices %>% filter(currency == 'USD..AM.') %>% select(-currency) %>% rename(gold_price = value)
+
+corr_data <- merge(x = wdi_by_year_only, y = gold_prices, by = "year")
+corr_data <- merge(x=corr_data, y = s_p_composite %>% spread(param, value), by = "year") %>%
+                          select(-year) 
+
+```
+
+```{r results='asis', warning=FALSE}
+
+cor <- cor(corr_data, use = "pairwise.complete.obs")
+```
+
+## Heatmapa korelacji - interaktywna
+
+```{r results='asis'}
+
+heatmaply_cor(cor)
+
+```
+
+## Najwyższe korelacje
+```{r results='asis'}
+cor_table <- as.data.frame(as.table(cor))
+
+biggest_corrs <- subset(cor_table, abs(Freq) > 0.9) %>%
+                  filter(abs(Freq) < 1) %>%
+                  arrange(desc(Freq))
+
+```
+
+## Przewidywanie ceny złota przy użyciu Random Forest
+```{r results='asis'}
+#corr_data$gold_price <- as.factor(corr_data$gold_price)
+
+set.seed(0)
+corr_data <- corr_data[, which(colMeans(!is.na(corr_data)) > 0.5)]
+split <- createDataPartition(corr_data$gold_price, p = 0.8, list = FALSE)
+
+training <- corr_data[split,]
+testing <- corr_data[-split,]
+
+rfGrid <- expand.grid(mtry = 10:30)
+control <- trainControl(method = "cv", number = 10)
+
+```
+
+```{r, warning=FALSE}
+
+rfFitTune <- train(gold_price ~ .,
+                   data = training,
+                   method = "rf",
+                   trControl = control,
+                   tuneGrid = rfGrid,
+                   na.action = na.roughfix,
+                   ntree = 30)
+
+```
+
+```{r}
+
+rfPred <- predict(rfFitTune , testing)
+
+knitr::kable(postResample(pred = rfPred, obs = testing$gold_price))
+
+```
+
+## Waga atrybutów
+```{r results='asis'}
+
+most_important_params <- arrange(varImp(rfFitTune)$importance, desc(Overall))
+knitr::kable(most_important_params)
+
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
